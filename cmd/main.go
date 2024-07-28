@@ -11,6 +11,7 @@ import (
 	"github.com/manx98/local_to_seaf_store/utils"
 	"github.com/manx98/local_to_seaf_store/virtualfs"
 	"github.com/spf13/cobra"
+	"go.etcd.io/bbolt"
 	"log"
 	"os"
 	"path/filepath"
@@ -79,14 +80,14 @@ func scanFs(cmd *cobra.Command, args []string) {
 type DirScanner struct {
 }
 
-func (d *DirScanner) saveProxyFile(id uint64, offset, size int64) (blkId string, err error) {
+func (d *DirScanner) saveProxyFile(tx *bbolt.Tx, id uint64, offset, size int64) (blkId string, err error) {
 	for {
 		blkId = utils.RandId()
 		savePath := filepath.Join("/", *repoId, blkId[:2], blkId[2:])
 		if offset+*blockSize > size {
-			err = virtualfs.WriteProxyFile(savePath, id, offset, size-offset)
+			err = virtualfs.WriteProxyFile(tx, savePath, id, offset, size-offset)
 		} else {
-			err = virtualfs.WriteProxyFile(savePath, id, offset, *blockSize)
+			err = virtualfs.WriteProxyFile(tx, savePath, id, offset, *blockSize)
 		}
 		if err != nil {
 			if errors.Is(err, syscall.EEXIST) {
@@ -98,29 +99,33 @@ func (d *DirScanner) saveProxyFile(id uint64, offset, size int64) (blkId string,
 	}
 
 }
-func (d *DirScanner) generateFile(size int64, storePath string) (string, error) {
+func (d *DirScanner) generateFile(size int64, storePath string) (blkId string, err error) {
 	log.Println("===>", storePath)
-	id, err := virtualfs.PutRealFilePath(storePath)
-	if err != nil {
-		return "", err
-	}
-	var ids []string
-	for i := int64(0); i < size; i += *blockSize {
-		blkId, err := d.saveProxyFile(id, i, size)
+	err = virtualfs.Batch(func(tx *bbolt.Tx) error {
+		id, err := virtualfs.PutRealFilePath(tx, storePath)
 		if err != nil {
-			return "", err
+			return err
 		}
-		ids = append(ids, blkId)
-	}
-	fileObj, err := fsmgr.NewSeafile(1, size, ids)
-	if err != nil {
-		return "", err
-	}
-	err = fsmgr.SaveSeafile(*repoId, fileObj)
-	if err != nil {
-		return "", err
-	}
-	return fileObj.FileID, nil
+		var ids []string
+		for i := int64(0); i < size; i += *blockSize {
+			blkId, err := d.saveProxyFile(tx, id, i, size)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, blkId)
+		}
+		fileObj, err := fsmgr.NewSeafile(1, size, ids)
+		if err != nil {
+			return err
+		}
+		err = fsmgr.SaveSeafile(*repoId, fileObj)
+		if err != nil {
+			return err
+		}
+		blkId = fileObj.FileID
+		return nil
+	})
+	return
 }
 
 func (d *DirScanner) Scan(parent string, storePath string) (rootId string, err error) {
@@ -163,5 +168,5 @@ func mountFs(cmd *cobra.Command, args []string) {
 	if err := virtualfs.InitVirtualFs(filepath.Join(*mountDataDir, "blocks_mapping.db")); err != nil {
 		log.Fatal(err)
 	}
-	virtualfs.Mount(context.Background(), *pathPrefix, *mountDataDir)
+	virtualfs.Mount(context.Background(), *pathPrefix, filepath.Join(*mountDataDir, "storage", "blocks"))
 }

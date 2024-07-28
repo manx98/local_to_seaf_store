@@ -7,13 +7,11 @@ import (
 	"go.etcd.io/bbolt"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 )
 
 var db *bbolt.DB
 var globalId uint64
-var globalIdLock sync.Mutex
 
 const (
 	RealPathToIdBucketName = "RTI"
@@ -21,7 +19,9 @@ const (
 )
 
 func InitVirtualFs(dbFile string) (err error) {
-	db, err = bbolt.Open(dbFile, os.ModePerm, nil)
+	db, err = bbolt.Open(dbFile, os.ModePerm, &bbolt.Options{
+		NoSync: true,
+	})
 	if err != nil {
 		return fmt.Errorf("create db: %w", err)
 	}
@@ -68,18 +68,16 @@ func mkdirAll(tx *bbolt.Tx, dir string) (err error) {
 	return
 }
 
-func MkdirAll(dir string) error {
-	return db.Batch(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(dir))
-		if bucket != nil {
-			return nil
-		}
-		_, err := tx.CreateBucket([]byte(dir))
-		if err != nil {
-			return err
-		}
-		return mkdirAll(tx, dir)
-	})
+func MkdirAll(tx *bbolt.Tx, dir string) error {
+	bucket := tx.Bucket([]byte(dir))
+	if bucket != nil {
+		return nil
+	}
+	_, err := tx.CreateBucket([]byte(dir))
+	if err != nil {
+		return err
+	}
+	return mkdirAll(tx, dir)
 }
 
 func ListDir(parent string) (direntList []fuse.Dirent, err error) {
@@ -103,28 +101,26 @@ func ListDir(parent string) (direntList []fuse.Dirent, err error) {
 	return
 }
 
-func WriteProxyFile(path string, readPathId uint64, offset int64, size int64) error {
+func WriteProxyFile(tx *bbolt.Tx, path string, readPathId uint64, offset int64, size int64) error {
 	parent := filepath.Dir(path)
-	err := MkdirAll(parent)
+	err := MkdirAll(tx, parent)
 	if err != nil {
 		return err
 	}
-	return db.Batch(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(parent))
-		if bucket == nil {
-			return syscall.ENOENT
-		}
-		data := make([]byte, 25)
-		binary.BigEndian.PutUint64(data, readPathId)
-		binary.BigEndian.PutUint64(data, uint64(offset))
-		binary.BigEndian.PutUint64(data, uint64(size))
-		data[24] = 1
-		fileName := []byte(filepath.Base(path))
-		if bucket.Get(fileName) != nil {
-			return syscall.EEXIST
-		}
-		return bucket.Put(fileName, data)
-	})
+	bucket := tx.Bucket([]byte(parent))
+	if bucket == nil {
+		return syscall.ENOENT
+	}
+	data := make([]byte, 25)
+	binary.BigEndian.PutUint64(data, readPathId)
+	binary.BigEndian.PutUint64(data[8:], uint64(offset))
+	binary.BigEndian.PutUint64(data[16:], uint64(size))
+	data[24] = 1
+	fileName := []byte(filepath.Base(path))
+	if bucket.Get(fileName) != nil {
+		return syscall.EEXIST
+	}
+	return bucket.Put(fileName, data)
 }
 
 func DeleteFile(path string) error {
@@ -171,35 +167,30 @@ func Lookup(path string, isDir *bool, size *int64, offset *int64, fId *uint64) e
 	})
 }
 
-func PutRealFilePath(path string) (id uint64, err error) {
-	globalIdLock.Lock()
-	defer globalIdLock.Unlock()
-	err = db.Batch(func(tx *bbolt.Tx) error {
-		rTiBucket := tx.Bucket([]byte(RealPathToIdBucketName))
-		if rTiBucket == nil {
-			return syscall.EIO
-		}
-		idData := rTiBucket.Get([]byte(path))
-		if idData != nil {
-			id = binary.BigEndian.Uint64(idData)
-			return nil
-		} else {
-			id = globalId + 1
-			idData = make([]byte, 8)
-			binary.BigEndian.PutUint64(idData, id)
-		}
-		if err = rTiBucket.Put([]byte(path), idData); err != nil {
-			return err
-		}
-		iTrBucket := tx.Bucket([]byte(IdToRealPathBucketName))
-		if iTrBucket == nil {
-			return syscall.EIO
-		}
-		if err = iTrBucket.Put(idData, []byte(path)); err != nil {
-			return err
-		}
-		return UpdateNextId(tx, globalId)
-	})
+func PutRealFilePath(tx *bbolt.Tx, path string) (id uint64, err error) {
+	rTiBucket := tx.Bucket([]byte(RealPathToIdBucketName))
+	if rTiBucket == nil {
+		return 0, syscall.EIO
+	}
+	idData := rTiBucket.Get([]byte(path))
+	if idData != nil {
+		id = binary.BigEndian.Uint64(idData)
+		return
+	} else {
+		id = globalId + 1
+		idData = make([]byte, 8)
+		binary.BigEndian.PutUint64(idData, id)
+	}
+	if err = rTiBucket.Put([]byte(path), idData); err != nil {
+		return
+	}
+	iTrBucket := tx.Bucket([]byte(IdToRealPathBucketName))
+	if iTrBucket == nil {
+		return 0, syscall.EIO
+	}
+	if err = iTrBucket.Put(idData, []byte(path)); err == nil {
+		err = UpdateNextId(tx, id)
+	}
 	return
 }
 
@@ -252,4 +243,8 @@ func Close() {
 	if db != nil {
 		_ = db.Close()
 	}
+}
+
+func Batch(fn func(*bbolt.Tx) error) error {
+	return db.Batch(fn)
 }

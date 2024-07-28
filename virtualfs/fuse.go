@@ -5,6 +5,7 @@ import (
 	"bazil.org/fuse/fs"
 	"context"
 	"log"
+	"os"
 )
 
 type fuseFs struct {
@@ -16,6 +17,16 @@ func (f *fuseFs) Root() (fs.Node, error) {
 }
 
 func Mount(ctx context.Context, pathPrefix, mountPoint string) {
+	if _, err := os.Stat(mountPoint); err != nil {
+		if os.IsNotExist(err) {
+			err = os.MkdirAll(mountPoint, os.ModePerm)
+			if err != nil {
+				log.Fatal("mkdir occur error: ", err)
+			}
+		} else {
+			log.Fatal("stat occur error: ", err)
+		}
+	}
 	if err := fuse.Unmount(mountPoint); err != nil {
 		log.Println("unmount occur error: ", err)
 	}

@@ -1,10 +1,9 @@
 package utils
 
 import (
-	"crypto/sha1"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/google/uuid"
 	"os"
 	"os/user"
 	"strconv"
@@ -29,11 +28,7 @@ func GetFileUsername(file string) string {
 }
 
 func RandId() string {
-	data, err := uuid.NewRandom()
-	if err != nil {
-		panic(err)
-	}
-	hash := sha1.New()
-	hash.Write(data[:])
-	return hex.EncodeToString(hash.Sum(nil))
+	data := make([]byte, 20)
+	_, _ = rand.Read(data)
+	return hex.EncodeToString(data)
 }

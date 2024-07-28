@@ -4,8 +4,8 @@ import (
 	"bazil.org/fuse"
 	"bazil.org/fuse/fs"
 	"context"
+	"os"
 	"path/filepath"
-	"syscall"
 )
 
 type DirNode struct {
@@ -14,7 +14,7 @@ type DirNode struct {
 }
 
 func (f *DirNode) Attr(ctx context.Context, attr *fuse.Attr) error {
-	attr.Mode = syscall.S_IFDIR | 0755
+	attr.Mode = os.ModeDir | 0o555
 	return nil
 }
 
@@ -33,7 +33,7 @@ func (f *DirNode) Lookup(ctx context.Context, name string) (fs.Node, error) {
 		return nil, err
 	}
 	if isDir {
-		return &DirNode{path: path, pathPrefix: path}, nil
+		return &DirNode{path: path, pathPrefix: f.pathPrefix}, nil
 	} else {
 		return &FileNode{pathPrefix: f.pathPrefix, path: path, id: fId, size: size, offset: offset}, nil
 	}
