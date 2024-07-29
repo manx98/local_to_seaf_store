@@ -4,10 +4,13 @@ import (
 	"bazil.org/fuse"
 	"encoding/binary"
 	"fmt"
+	"github.com/manx98/local_to_seaf_store/logger"
 	"go.etcd.io/bbolt"
+	"go.uber.org/zap"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 var db *bbolt.DB
@@ -18,28 +21,31 @@ const (
 	IdToRealPathBucketName = "ITR"
 )
 
-func InitVirtualFs(dbFile string) (err error) {
+func InitVirtualFs(dbFile string, readOnly bool) (err error) {
 	db, err = bbolt.Open(dbFile, os.ModePerm, &bbolt.Options{
-		NoSync: true,
+		NoSync:   true,
+		ReadOnly: readOnly,
 	})
 	if err != nil {
 		return fmt.Errorf("create db: %w", err)
 	}
-	globalId, err = LastRealFileId()
-	if err != nil {
-		return fmt.Errorf("get last real file globalId: %w", err)
+	if !readOnly {
+		globalId, err = LastRealFileId()
+		if err != nil {
+			return fmt.Errorf("get last real file globalId: %w", err)
+		}
+		err = db.Batch(func(tx *bbolt.Tx) error {
+			_, cErr := tx.CreateBucketIfNotExists([]byte(RealPathToIdBucketName))
+			if cErr != nil {
+				return fmt.Errorf("create %s bucket: %w", RealPathToIdBucketName, cErr)
+			}
+			_, cErr = tx.CreateBucketIfNotExists([]byte(IdToRealPathBucketName))
+			if cErr != nil {
+				return fmt.Errorf("create %s bucket: %w", IdToRealPathBucketName, cErr)
+			}
+			return nil
+		})
 	}
-	err = db.Batch(func(tx *bbolt.Tx) error {
-		_, cErr := tx.CreateBucketIfNotExists([]byte(RealPathToIdBucketName))
-		if cErr != nil {
-			return fmt.Errorf("create %s bucket: %w", RealPathToIdBucketName, cErr)
-		}
-		_, cErr = tx.CreateBucketIfNotExists([]byte(IdToRealPathBucketName))
-		if cErr != nil {
-			return fmt.Errorf("create %s bucket: %w", IdToRealPathBucketName, cErr)
-		}
-		return nil
-	})
 	return
 }
 
@@ -60,7 +66,9 @@ func mkdirAll(tx *bbolt.Tx, dir string) (err error) {
 	file := filepath.Base(dir)
 	if file != dir {
 		if data := bucket.Get([]byte(file)); data == nil {
-			err = bucket.Put([]byte(file), []byte{0})
+			data = make([]byte, 9)
+			binary.BigEndian.PutUint64(data, uint64(time.Now().Unix()))
+			err = bucket.Put([]byte(file), data)
 		} else if data[len(data)-1] != 0 {
 			return syscall.EPERM
 		}
@@ -101,7 +109,7 @@ func ListDir(parent string) (direntList []fuse.Dirent, err error) {
 	return
 }
 
-func WriteProxyFile(tx *bbolt.Tx, path string, readPathId uint64, offset int64, size int64) error {
+func WriteProxyFile(tx *bbolt.Tx, path string, readPathId uint64, offset int64, size int64, mtime int64) error {
 	parent := filepath.Dir(path)
 	err := MkdirAll(tx, parent)
 	if err != nil {
@@ -111,11 +119,12 @@ func WriteProxyFile(tx *bbolt.Tx, path string, readPathId uint64, offset int64, 
 	if bucket == nil {
 		return syscall.ENOENT
 	}
-	data := make([]byte, 25)
+	data := make([]byte, 33)
 	binary.BigEndian.PutUint64(data, readPathId)
 	binary.BigEndian.PutUint64(data[8:], uint64(offset))
 	binary.BigEndian.PutUint64(data[16:], uint64(size))
-	data[24] = 1
+	binary.BigEndian.PutUint64(data[24:], uint64(mtime))
+	data[32] = 1
 	fileName := []byte(filepath.Base(path))
 	if bucket.Get(fileName) != nil {
 		return syscall.EEXIST
@@ -146,7 +155,7 @@ func DeleteDir(path string) error {
 	})
 }
 
-func Lookup(path string, isDir *bool, size *int64, offset *int64, fId *uint64) error {
+func Lookup(path string, isDir *bool, size *int64, offset *int64, fId *uint64, mtime *int64) error {
 	return db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(filepath.Dir(path)))
 		if bucket == nil {
@@ -158,21 +167,23 @@ func Lookup(path string, isDir *bool, size *int64, offset *int64, fId *uint64) e
 		}
 		if data[len(data)-1] == 0 {
 			*isDir = true
+			*mtime = int64(binary.BigEndian.Uint64(data))
 		} else {
 			*fId = binary.BigEndian.Uint64(data)
 			*offset = int64(binary.BigEndian.Uint64(data[8:]))
 			*size = int64(binary.BigEndian.Uint64(data[16:]))
+			*mtime = int64(binary.BigEndian.Uint64(data[24:]))
 		}
 		return nil
 	})
 }
 
-func PutRealFilePath(tx *bbolt.Tx, path string) (id uint64, err error) {
+func PutRealFilePath(tx *bbolt.Tx, path []byte) (id uint64, err error) {
 	rTiBucket := tx.Bucket([]byte(RealPathToIdBucketName))
 	if rTiBucket == nil {
 		return 0, syscall.EIO
 	}
-	idData := rTiBucket.Get([]byte(path))
+	idData := rTiBucket.Get(path)
 	if idData != nil {
 		id = binary.BigEndian.Uint64(idData)
 		return
@@ -181,14 +192,14 @@ func PutRealFilePath(tx *bbolt.Tx, path string) (id uint64, err error) {
 		idData = make([]byte, 8)
 		binary.BigEndian.PutUint64(idData, id)
 	}
-	if err = rTiBucket.Put([]byte(path), idData); err != nil {
+	if err = rTiBucket.Put(path, idData); err != nil {
 		return
 	}
 	iTrBucket := tx.Bucket([]byte(IdToRealPathBucketName))
 	if iTrBucket == nil {
 		return 0, syscall.EIO
 	}
-	if err = iTrBucket.Put(idData, []byte(path)); err == nil {
+	if err = iTrBucket.Put(idData, path); err == nil {
 		err = UpdateNextId(tx, id)
 	}
 	return
@@ -226,7 +237,15 @@ func GetRealFilePath(id uint64) (path string, err error) {
 		if bucket == nil {
 			return syscall.EIO
 		}
-		path = string(bucket.Get(binary.BigEndian.AppendUint64([]byte{}, id)))
+		pathData := bucket.Get(binary.BigEndian.AppendUint64([]byte{}, id))
+		if pathData == nil {
+			return syscall.ENOENT
+		}
+		if len(pathData) < 36 {
+			logger.Error("invalid real path", zap.ByteString("path", pathData))
+			return syscall.EIO
+		}
+		path = string(pathData[36:])
 		if path == "" {
 			return syscall.ENOENT
 		}

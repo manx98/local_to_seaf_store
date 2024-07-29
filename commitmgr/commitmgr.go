@@ -7,7 +7,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"github.com/manx98/local_to_seaf_store/objstore"
+	"github.com/manx98/local_to_seaf_store/utils"
 	"io"
 	"time"
 )
@@ -50,22 +52,45 @@ func Init(dataDir string) {
 }
 
 // NewCommit initializes a Commit object.
-func NewCommit(id, repoID, parentID, newRoot, user, desc string) *Commit {
+func NewCommit(parent *Commit, newRoot, user, desc string) *Commit {
 	commit := new(Commit)
-	commit.RepoID = repoID
+	commit.RepoID = parent.RepoID
 	commit.RootID = newRoot
 	commit.Desc = desc
 	commit.CreatorName = user
 	commit.CreatorID = "0000000000000000000000000000000000000000"
 	commit.Ctime = time.Now().Unix()
-	if id == "" {
-		commit.CommitID = computeCommitID(commit)
-	} else {
-		commit.CommitID = id
+	commit.CommitID = computeCommitID(commit)
+	if parent != nil {
+		commit.ParentID.SetValid(parent.CommitID)
 	}
-	if parentID != "" {
-		commit.ParentID.SetValid(parentID)
+
+	commit.RepoName = parent.RepoName
+	commit.Encrypted = parent.Encrypted
+	if parent.Encrypted == "true" {
+		commit.EncVersion = parent.EncVersion
+		if parent.EncVersion == 1 && parent.PwdHash == "" {
+			commit.Magic = parent.Magic
+		} else if parent.EncVersion == 2 {
+			commit.RandomKey = parent.RandomKey
+		} else if parent.EncVersion == 3 {
+			commit.RandomKey = parent.RandomKey
+			commit.Salt = parent.Salt
+		} else if parent.EncVersion == 4 {
+			commit.RandomKey = parent.RandomKey
+			commit.Salt = parent.Salt
+		}
+		if parent.EncVersion >= 2 && parent.PwdHash == "" {
+			commit.Magic = parent.Magic
+		}
+		if parent.PwdHash != "" {
+			commit.PwdHash = parent.PwdHash
+			commit.PwdHashAlgo = parent.PwdHashAlgo
+			commit.PwdHashParams = parent.PwdHashParams
+		}
 	}
+	commit.Version = parent.Version
+
 	return commit
 }
 
@@ -100,9 +125,44 @@ func (commit *Commit) ToData(w io.Writer) error {
 	return nil
 }
 
+// FromData reads from p and converts JSON-encoded data to commit.
+func (commit *Commit) FromData(p []byte) error {
+	err := json.Unmarshal(p, commit)
+	if err != nil {
+		return err
+	}
+
+	if !utils.IsValidUUID(commit.RepoID) {
+		return fmt.Errorf("repo id %s is invalid", commit.RepoID)
+	}
+	if !utils.IsObjectIDValid(commit.RootID) {
+		return fmt.Errorf("root id %s is invalid", commit.RootID)
+	}
+	if len(commit.CreatorID) != 40 {
+		return fmt.Errorf("creator id %s is invalid", commit.CreatorID)
+	}
+	if commit.ParentID.Valid && !utils.IsObjectIDValid(commit.ParentID.String) {
+		return fmt.Errorf("parent id %s is invalid", commit.ParentID.String)
+	}
+	if commit.SecondParentID.Valid && !utils.IsObjectIDValid(commit.SecondParentID.String) {
+		return fmt.Errorf("second parent id %s is invalid", commit.SecondParentID.String)
+	}
+
+	return nil
+}
+
 // WriteRaw writes data in binary format to storage backend.
 func WriteRaw(repoID string, commitID string, r io.Reader) error {
 	err := store.Write(repoID, commitID, r, false)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// ReadRaw reads data in binary format from storage backend.
+func ReadRaw(repoID string, commitID string, w io.Writer) error {
+	err := store.Read(repoID, commitID, w)
 	if err != nil {
 		return err
 	}
@@ -123,4 +183,19 @@ func Save(commit *Commit) error {
 	}
 
 	return err
+}
+
+// Load commit from storage backend.
+func Load(repoID string, commitID string) (*Commit, error) {
+	var buf bytes.Buffer
+	commit := new(Commit)
+	err := ReadRaw(repoID, commitID, &buf)
+	if err != nil {
+		return nil, err
+	}
+	err = commit.FromData(buf.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	return commit, nil
 }
