@@ -98,6 +98,7 @@ func scanFs(cmd *cobra.Command, args []string) {
 	if err != nil {
 		logger.Fatal("sync occur error", zap.Error(err))
 	}
+	logger.Info("scan success", zap.String("commit_id", commit.CommitID), zap.String("repo_id", *scanRepoId), zap.String("scan_dir", *scanDir))
 }
 
 type DirScanner struct {
