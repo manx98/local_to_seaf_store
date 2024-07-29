@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 )
 
@@ -134,25 +135,27 @@ func (d *DirScanner) Scan(parent string, storePath string) (rootId string, err e
 		return "", err
 	}
 	entries := make([]*fsmgr.SeafDirent, 0, len(dir))
-	for _, file := range dir {
+	for i := range dir {
+		file := dir[i]
 		filePath := filepath.Join(parent, file.Name())
-		info, err := file.Info()
-		if err != nil {
-			return "", err
+		info, iErr := file.Info()
+		if iErr != nil {
+			return "", iErr
 		}
 		if file.IsDir() {
-			rootId, err = d.Scan(filePath, storePath+"/"+file.Name())
-			if err != nil {
-				return "", err
+			rootId, iErr = d.Scan(filePath, storePath+"/"+file.Name())
+			if iErr != nil {
+				return "", iErr
 			}
 		} else {
-			rootId, err = d.generateFile(info.Size(), storePath+"/"+file.Name())
-			if err != nil {
-				return "", err
+			rootId, iErr = d.generateFile(info.Size(), storePath+"/"+file.Name())
+			if iErr != nil {
+				return "", iErr
 			}
 		}
 		entries = append(entries, fsmgr.NewDirent(rootId, file.Name(), uint32(info.Mode()), info.ModTime().Unix(), utils.GetFileUsername(filePath), info.Size()))
 	}
+	sort.Sort(fsmgr.Dirents(entries))
 	dirObj, err := fsmgr.NewSeafdir(1, entries)
 	if err != nil {
 		return "", err

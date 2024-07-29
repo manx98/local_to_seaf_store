@@ -17,6 +17,20 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 var store *objstore.ObjectStore
 
+// Dirents is an alias for slice of SeafDirent.
+type Dirents []*SeafDirent
+
+func (d Dirents) Less(i, j int) bool {
+	return d[i].Name > d[j].Name
+}
+
+func (d Dirents) Swap(i, j int) {
+	d[i], d[j] = d[j], d[i]
+}
+func (d Dirents) Len() int {
+	return len(d)
+}
+
 func Init(dataDir string) {
 	store = objstore.New(dataDir, "fs")
 }
