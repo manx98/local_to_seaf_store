@@ -31,7 +31,7 @@ func (f *FileNode) Attr(ctx context.Context, attr *fuse.Attr) error {
 }
 
 func (f *FileNode) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenResponse) (fs.Handle, error) {
-	logger.Debug("get real file path occur error",
+	logger.Debug("open file",
 		zap.Uint64("id", f.id),
 		zap.String("m_path", f.path),
 		zap.Int64("size", f.size),
@@ -45,7 +45,7 @@ func (f *FileNode) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.O
 	}
 	path, err := GetRealFilePath(f.id)
 	if err != nil {
-		logger.Warn("get real file path occur error",
+		logger.Warn("open file occur error",
 			zap.Uint64("id", f.id),
 			zap.String("m_path", f.path),
 			zap.Int64("size", f.size),
@@ -59,7 +59,7 @@ func (f *FileNode) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.O
 	handle := &FileHandle{node: f}
 	handle.f, err = os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
-		logger.Warn("open real file path occur error",
+		logger.Warn("open file occur error",
 			zap.Uint64("id", f.id),
 			zap.String("m_path", f.path),
 			zap.String("r_path", path),
