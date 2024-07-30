@@ -6,7 +6,7 @@ import (
 
 func Test_scanFs(t *testing.T) {
 	dataDir = new(string)
-	*dataDir = "/tmp"
+	*dataDir = "/seafile-data"
 	parentCommitId = new(string)
 	*parentCommitId = "7c4be441b8f7f9c999f29837716ea79e44437995"
 	scanRepoId = new(string)
@@ -22,10 +22,12 @@ func Test_scanFs(t *testing.T) {
 
 func Test_mount(t *testing.T) {
 	mountDataDir = new(string)
-	*mountDataDir = "/tmp"
+	*mountDataDir = "/seafile-data"
 	pathPrefix = new(string)
 	*pathPrefix = "/cdrom/pool"
 	mountRepoId = new(string)
 	*mountRepoId = "11a6e0ac-a8be-42ea-ac71-67472ce2710a"
+	allowOther = new(bool)
+	*allowOther = true
 	mountFs(nil, nil)
 }

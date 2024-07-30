@@ -48,6 +48,7 @@ var mountCmd = &cobra.Command{
 var mountDataDir *string
 var mountRepoId *string
 var pathPrefix *string
+var allowOther *bool
 
 func main() {
 	defer virtualfs.Close()
@@ -62,6 +63,7 @@ func main() {
 	mountDataDir = mountCmd.Flags().StringP("data_dir", "d", "/opt/seafile/seafile-data/storage", "The program will mount the blocks directory in this directory")
 	mountRepoId = mountCmd.Flags().StringP("repo_id", "r", "00a57a07-79b0-4156-ab36-a556cfa54d57", "The RepoID corresponding to the scan result fs and commit")
 	pathPrefix = mountCmd.Flags().StringP("path_prefix", "m", ".", "File mapping parent directory, corresponding to scan_dir in the scan")
+	allowOther = mountCmd.Flags().BoolP("allow_other", "a", false, "allow_other only allowed if 'user_allow_other' is set in /etc/fuse.conf")
 	if err := appCmd.Execute(); err != nil {
 		log.Fatal("run cmd occur error: ", err)
 	}
