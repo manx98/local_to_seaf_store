@@ -202,5 +202,5 @@ func mountFs(cmd *cobra.Command, args []string) {
 	if err := virtualfs.InitVirtualFs(filepath.Join(*mountDataDir, "blocks_mapping.db"), true); err != nil {
 		logger.Fatal("init virtual fs error", zap.Error(err))
 	}
-	virtualfs.Mount(context.Background(), *pathPrefix, filepath.Join(*mountDataDir, "storage", "blocks", *mountRepoId), *mountRepoId)
+	virtualfs.Mount(context.Background(), *pathPrefix, filepath.Join(*mountDataDir, "storage", "blocks", *mountRepoId), *mountRepoId, *allowOther)
 }
